@@ -7,13 +7,14 @@ import numpy as np
 import tensorflow as tf
 from tensorflow.python.util import nest
 import collections
+from utils import expand, learned_init
 
 NTMRNNControllerState = collections.namedtuple('NTMRNNControllerState', ('controller_state', 'read_vector_list', 'w_list', 'M'))
 NTMFFControllerState = collections.namedtuple('NTMFFControllerState', ('read_vector_list', 'w_list', 'M'))
 
 class NTMCell(tf.contrib.rnn.RNNCell):
     def __init__(self, controller_type, controller_layers, controller_units, memory_size, memory_vector_dim, read_head_num, write_head_num, init_mode='random',
-                 addressing_mode='content_and_location', shift_range=1, reuse=False, output_dim=None):
+                 addressing_mode='content_and_location', shift_range=1, reuse=False, output_dim=None, clip_value=20):
         self.controller_type = controller_type
         self.controller_layers = controller_layers
         self.controller_units = controller_units
@@ -24,8 +25,9 @@ class NTMCell(tf.contrib.rnn.RNNCell):
         self.init_mode = init_mode
         self.addressing_mode = addressing_mode
         self.reuse = reuse
+        self.clip_value = clip_value
 
-        if self.controller_type in ('lstm', 'rnn'):
+        if self.controller_type != 'feed_forward':
             def single_cell(num_units):
                 if self.controller_type == 'lstm':
                     return tf.contrib.rnn.BasicLSTMCell(num_units, forget_bias=1.0)
@@ -43,60 +45,36 @@ class NTMCell(tf.contrib.rnn.RNNCell):
 
         controller_input = tf.concat([x] + prev_read_vector_list, axis=1)
         with tf.variable_scope('controller', reuse=self.reuse):
-            if self.controller_type == 'lstm':
-                controller_output, controller_state = self.controller(controller_input, prev_state.controller_state)
-            else:
+            if self.controller_type == 'feed_forward':
                 controller_output = controller_input
                 for _ in range(self.controller_layers):
                     controller_output = tf.contrib.layers.fully_connected(
                     controller_output, self.controller_units, activation_fn=tf.nn.relu)
-
-        # controller_output     -> k (dim = memory_vector_dim, compared to each vector in M, Sec 3.1)
-        #                       -> beta (positive scalar, key strength, Sec 3.1)                -> w^c
-        #                       -> g (scalar in (0, 1), blend between w_prev and w^c, Sec 3.2)  -> w^g
-        #                       -> s (dim = shift_range * 2 + 1, shift weighting, Sec 3.2)      -> w^~
-        #                            (not memory_size, that's too wide)
-        #                       -> gamma (scalar (>= 1), sharpen the final result, Sec 3.2)     -> w    * num_heads
-        # controller_output     -> erase, add vector (dim = memory_vector_dim, \in (0, 1), Sec 3.2)     * write_head_num
+            else:
+                controller_output, controller_state = self.controller(controller_input, prev_state.controller_state)
 
         num_parameters_per_head = self.memory_vector_dim + 1 + 1 + (self.shift_range * 2 + 1) + 1
         num_heads = self.read_head_num + self.write_head_num
         total_parameter_num = num_parameters_per_head * num_heads + self.memory_vector_dim * 2 * self.write_head_num
         with tf.variable_scope("o2p", reuse=(self.step > 0) or self.reuse):
-            # o2p_w = tf.get_variable('o2p_w', [controller_output.get_shape()[1], total_parameter_num],
-            #                         initializer=tf.random_normal_initializer(mean=0.0, stddev=0.5))
-            # o2p_b = tf.get_variable('o2p_b', [total_parameter_num],
-            #                         initializer=tf.random_normal_initializer(mean=0.0, stddev=0.5))
-            # parameters = tf.nn.xw_plus_b(controller_output, o2p_w, o2p_b)
             parameters = tf.contrib.layers.fully_connected(controller_output, total_parameter_num, activation_fn=None)
-            parameters = tf.clip_by_value(parameters, -20, 20)
+            parameters = tf.clip_by_value(parameters, -self.clip_value, self.clip_value)
         head_parameter_list = tf.split(parameters[:, :num_parameters_per_head * num_heads], num_heads, axis=1)
         erase_add_list = tf.split(parameters[:, num_parameters_per_head * num_heads:], 2 * self.write_head_num, axis=1)
 
-        # k, beta, g, s, gamma -> w
-
-        prev_w_list = prev_state.w_list  # vector of weightings (blurred address) over locations
+        prev_w_list = prev_state.w_list
         prev_M = prev_state.M
         w_list = []
         for i, head_parameter in enumerate(head_parameter_list):
-
-            # Some functions to constrain the result in specific range
-            # exp(x)                -> x > 0
-            # sigmoid(x)            -> x \in (0, 1)
-            # softmax(x)            -> sum_i x_i = 1
-            # log(exp(x) + 1) + 1   -> x > 1
-
             k = tf.tanh(head_parameter[:, 0:self.memory_vector_dim])
-            # beta = tf.sigmoid(head_parameter[:, self.memory_vector_dim]) * 10        # do not use exp, it will explode!
             beta = tf.nn.softplus(head_parameter[:, self.memory_vector_dim])
             g = tf.sigmoid(head_parameter[:, self.memory_vector_dim + 1])
             s = tf.nn.softmax(
                 head_parameter[:, self.memory_vector_dim + 2:self.memory_vector_dim + 2 + (self.shift_range * 2 + 1)]
             )
-            # gamma = tf.log(tf.exp(head_parameter[:, -1]) + 1) + 1
             gamma = tf.nn.softplus(head_parameter[:, -1]) + 1
             with tf.variable_scope('addressing_head_%d' % i):
-                w = self.addressing(k, beta, g, s, gamma, prev_M, prev_w_list[i])     # Figure 2
+                w = self.addressing(k, beta, g, s, gamma, prev_M, prev_w_list[i])
             w_list.append(w)
 
         # Reading (Sec 3.1)
@@ -117,32 +95,22 @@ class NTMCell(tf.contrib.rnn.RNNCell):
             add_vector = tf.expand_dims(tf.tanh(erase_add_list[i * 2 + 1]), axis=1)
             M = M * (tf.ones(M.get_shape()) - tf.matmul(w, erase_vector)) + tf.matmul(w, add_vector)
 
-        # controller_output -> NTM output
-
         if not self.output_dim:
             output_dim = x.get_shape()[1]
         else:
             output_dim = self.output_dim
         with tf.variable_scope("o2o", reuse=(self.step > 0) or self.reuse):
-            # o2o_w = tf.get_variable('o2o_w', [controller_output.get_shape()[1], output_dim],
-            #                         initializer=tf.random_normal_initializer(mean=0.0, stddev=0.5))
-            # o2o_b = tf.get_variable('o2o_b', [output_dim],
-            #                         initializer=tf.random_normal_initializer(mean=0.0, stddev=0.5))
-            # NTM_output = tf.nn.xw_plus_b(controller_output, o2o_w, o2o_b)
-            
-            # NTM_output = tf.contrib.layers.fully_connected(controller_output, output_dim, activation_fn=None)
-
             NTM_output = tf.contrib.layers.fully_connected(tf.concat([controller_output] + read_vector_list, axis=1),
                 output_dim, activation_fn=None)
-            NTM_output = tf.clip_by_value(NTM_output, -20, 20)
+            NTM_output = tf.clip_by_value(NTM_output, -self.clip_value, self.clip_value)
 
         self.step += 1
-        if self.controller_type == 'lstm':
-            return NTM_output, NTMRNNControllerState(
-                controller_state=controller_state, read_vector_list=read_vector_list, w_list=w_list, M=M)
-        else:
+        if self.controller_type == 'feed_forward':
             return NTM_output, NTMFFControllerState(
                 read_vector_list=read_vector_list, w_list=w_list, M=M)
+        else:
+            return NTM_output, NTMRNNControllerState(
+                controller_state=controller_state, read_vector_list=read_vector_list, w_list=w_list, M=M)
 
     def addressing(self, k, beta, g, s, gamma, prev_M, prev_w):
 
@@ -185,13 +153,6 @@ class NTMCell(tf.contrib.rnn.RNNCell):
         return w
 
     def zero_state(self, batch_size, dtype):
-        def expand(x, dim, N):
-            return tf.concat([tf.expand_dims(x, dim) for _ in range(N)], axis=dim)
-
-        def learned_init(units):
-            return tf.squeeze(tf.contrib.layers.fully_connected(tf.ones([1, 1]), units,
-                activation_fn=None, biases_initializer=None))
-
         with tf.variable_scope('init', reuse=self.reuse):
             if self.init_mode == 'random':
                 read_vector_list = [expand(tf.nn.softmax(tf.get_variable('init_r_%d' % i, [self.memory_vector_dim],
@@ -214,28 +175,11 @@ class NTMCell(tf.contrib.rnn.RNNCell):
 
                 M = tf.zeros([batch_size, self.memory_size, self.memory_vector_dim])
             elif self.init_mode == 'learned':
-                # def learned_init(units):
-                #     return tf.contrib.layers.fully_connected(tf.ones([batch_size, 1]), units, activation_fn=None)
-
-                # read_vector_list = [tf.tanh(learned_init(self.memory_vector_dim))
-                #     for i in range(self.read_head_num)]
-
-                # w_list = [tf.nn.softmax(learned_init(self.memory_size))
-                #     for i in range(self.read_head_num + self.write_head_num)]
-
-                # M = tf.tanh(
-                #     tf.reshape(
-                #         learned_init(self.memory_size * self.memory_vector_dim),
-                #         [batch_size, self.memory_size, self.memory_vector_dim])
-                #     )
-
                 read_vector_list = [expand(tf.tanh(learned_init(self.memory_vector_dim)), dim=0, N=batch_size)
                     for i in range(self.read_head_num)]
 
                 w_list = [expand(tf.nn.softmax(learned_init(self.memory_size)), dim=0, N=batch_size)
                     for i in range(self.read_head_num + self.write_head_num)]
-
-                # M = tf.zeros([batch_size, self.memory_size, self.memory_vector_dim])
 
                 M = expand(tf.tanh(
                     tf.reshape(
@@ -243,50 +187,36 @@ class NTMCell(tf.contrib.rnn.RNNCell):
                         [self.memory_size, self.memory_vector_dim])
                     ), dim=0, N=batch_size)
 
-            
-            if self.controller_type == 'lstm':
-                controller_init_state = self.controller.zero_state(batch_size, dtype)
-
-                # # controller_init_state = nest.pack_sequence_as(self.controller.state_size,
-                # #     learned_init(self.controller_layers * self.controller_units * 2))
-
-                # # controller_init_state = tf.reshape(learned_init(self.controller_layers * self.controller_units * 2),
-                # #     tf.squeeze(self.controller.state_size))
-
-                # controller_init_state = (learned_init(self.controller_layers * self.controller_units),
-                #     learned_init(self.controller_layers * self.controller_units))
-
-                # controller_init_state = tuple(tf.contrib.rnn.LSTMStateTuple(
-                #     c=expand(tf.tanh(learned_init(self.controller_units)), dim=0, N=batch_size),
-                #     h=expand(tf.tanh(learned_init(self.controller_units)), dim=0, N=batch_size))
-                #     for _ in range(self.controller_layers))
-
-                # controller_init_state = tuple(expand(learned_init(self.controller_units), dim=0, N=batch_size)
-                #     for _ in range(self.controller_layers))
-
-                print 'controller_init_state', controller_init_state
+            if self.controller_type == 'feed_forward':
+                return NTMFFControllerState(
+                    read_vector_list=read_vector_list,
+                    w_list=w_list,
+                    M=M)
+            else:
+                if self.controller_type == 'lstm':
+                    controller_init_state = tuple(tf.contrib.rnn.LSTMStateTuple(
+                        c=expand(tf.tanh(learned_init(self.controller_units)), dim=0, N=batch_size),
+                        h=expand(tf.tanh(learned_init(self.controller_units)), dim=0, N=batch_size))
+                        for _ in range(self.controller_layers))
+                else:
+                    controller_init_state = self.controller.zero_state(batch_size, dtype)
 
                 return NTMRNNControllerState(
                     controller_state=controller_init_state,
                     read_vector_list=read_vector_list,
                     w_list=w_list,
                     M=M)
-            else:
-                return NTMFFControllerState(
-                    read_vector_list=read_vector_list,
-                    w_list=w_list,
-                    M=M)
 
     @property
     def state_size(self):
-        if self.controller_type == 'lstm':
-            return NTMRNNControllerState(
-                controller_state=self.controller.state_size,
+        if self.controller_type == 'feed_forward':
+            return NTMFFControllerState(
                 read_vector_list=[self.memory_vector_dim for _ in range(self.read_head_num)],
                 w_list=[self.memory_size for _ in range(self.read_head_num + self.write_head_num)],
                 M=tf.TensorShape([self.memory_size * self.memory_vector_dim]))
         else:
-            return NTMFFControllerState(
+            return NTMRNNControllerState(
+                controller_state=self.controller.state_size,
                 read_vector_list=[self.memory_vector_dim for _ in range(self.read_head_num)],
                 w_list=[self.memory_size for _ in range(self.read_head_num + self.write_head_num)],
                 M=tf.TensorShape([self.memory_size * self.memory_vector_dim]))
