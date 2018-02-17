@@ -14,12 +14,12 @@
 # ==============================================================================
 """DNC access modules."""
 
-from __future__ import absolute_import
-from __future__ import division
-from __future__ import print_function
+# from __future__ import absolute_import
+# from __future__ import division
+# from __future__ import print_function
 
 import collections
-import sonnet as snt
+import sonnet_ as snt
 import tensorflow as tf
 
 import addressing

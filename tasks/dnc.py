@@ -18,14 +18,15 @@ These modules create a DNC core. They take input, pass parameters to the memory
 access module, and integrate the output of memory to form an output.
 """
 
-from __future__ import absolute_import
-from __future__ import division
-from __future__ import print_function
+# from __future__ import absolute_import
+# from __future__ import division
+# from __future__ import print_function
 
 import collections
 import numpy as np
-import sonnet as snt
+import sonnet_ as snt
 import tensorflow as tf
+from tensorflow.python.util import nest
 
 import access
 
@@ -62,11 +63,7 @@ class DNC(snt.RNNCore):
     super(DNC, self).__init__(name=name)
 
     with self._enter_variable_scope():
-      if controller_config['controller_type'] == 'lstm':
-        controller_config.pop('controller_type')
-        self._controller = snt.LSTM(**controller_config)
-      else:
-        self._controller = tf.nn.rnn_cell.BasicRNNCell(controller_config['hidden_size'])
+      self._controller = snt.LSTM(**controller_config)
       self._access = access.MemoryAccess(**access_config)
 
     self._access_output_size = np.prod(self._access.output_size.as_list())

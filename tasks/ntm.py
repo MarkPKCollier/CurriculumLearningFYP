@@ -9,32 +9,25 @@ from tensorflow.python.util import nest
 import collections
 from utils import expand, learned_init
 
-NTMRNNControllerState = collections.namedtuple('NTMRNNControllerState', ('controller_state', 'read_vector_list', 'w_list', 'M'))
-NTMFFControllerState = collections.namedtuple('NTMFFControllerState', ('read_vector_list', 'w_list', 'M'))
+NTMControllerState = collections.namedtuple('NTMRNNControllerState', ('controller_state', 'read_vector_list', 'w_list', 'M'))
 
 class NTMCell(tf.contrib.rnn.RNNCell):
-    def __init__(self, controller_type, controller_layers, controller_units, memory_size, memory_vector_dim, read_head_num, write_head_num, init_mode='random',
+    def __init__(self, controller_layers, controller_units, memory_size, memory_vector_dim, read_head_num, write_head_num,
                  addressing_mode='content_and_location', shift_range=1, reuse=False, output_dim=None, clip_value=20):
-        self.controller_type = controller_type
         self.controller_layers = controller_layers
         self.controller_units = controller_units
         self.memory_size = memory_size
         self.memory_vector_dim = memory_vector_dim
         self.read_head_num = read_head_num
         self.write_head_num = write_head_num
-        self.init_mode = init_mode
         self.addressing_mode = addressing_mode
         self.reuse = reuse
         self.clip_value = clip_value
 
-        if self.controller_type != 'feed_forward':
-            def single_cell(num_units):
-                if self.controller_type == 'lstm':
-                    return tf.contrib.rnn.BasicLSTMCell(num_units, forget_bias=1.0)
-                else:
-                    return tf.nn.rnn_cell.BasicRNNCell(num_units)
+        def single_cell(num_units):
+            return tf.contrib.rnn.BasicLSTMCell(num_units, forget_bias=1.0)
 
-            self.controller = tf.contrib.rnn.MultiRNNCell([single_cell(self.controller_units) for _ in range(self.controller_layers)])
+        self.controller = tf.contrib.rnn.MultiRNNCell([single_cell(self.controller_units) for _ in range(self.controller_layers)])
 
         self.step = 0
         self.output_dim = output_dim
@@ -45,13 +38,7 @@ class NTMCell(tf.contrib.rnn.RNNCell):
 
         controller_input = tf.concat([x] + prev_read_vector_list, axis=1)
         with tf.variable_scope('controller', reuse=self.reuse):
-            if self.controller_type == 'feed_forward':
-                controller_output = controller_input
-                for _ in range(self.controller_layers):
-                    controller_output = tf.contrib.layers.fully_connected(
-                    controller_output, self.controller_units, activation_fn=tf.nn.relu)
-            else:
-                controller_output, controller_state = self.controller(controller_input, prev_state.controller_state)
+            controller_output, controller_state = self.controller(controller_input, prev_state.controller_state)
 
         num_parameters_per_head = self.memory_vector_dim + 1 + 1 + (self.shift_range * 2 + 1) + 1
         num_heads = self.read_head_num + self.write_head_num
@@ -105,12 +92,8 @@ class NTMCell(tf.contrib.rnn.RNNCell):
             NTM_output = tf.clip_by_value(NTM_output, -self.clip_value, self.clip_value)
 
         self.step += 1
-        if self.controller_type == 'feed_forward':
-            return NTM_output, NTMFFControllerState(
-                read_vector_list=read_vector_list, w_list=w_list, M=M)
-        else:
-            return NTM_output, NTMRNNControllerState(
-                controller_state=controller_state, read_vector_list=read_vector_list, w_list=w_list, M=M)
+        return NTM_output, NTMControllerState(
+            controller_state=controller_state, read_vector_list=read_vector_list, w_list=w_list, M=M)
 
     def addressing(self, k, beta, g, s, gamma, prev_M, prev_w):
 
@@ -154,72 +137,36 @@ class NTMCell(tf.contrib.rnn.RNNCell):
 
     def zero_state(self, batch_size, dtype):
         with tf.variable_scope('init', reuse=self.reuse):
-            if self.init_mode == 'random':
-                read_vector_list = [expand(tf.nn.softmax(tf.get_variable('init_r_%d' % i, [self.memory_vector_dim],
-                    initializer=tf.random_normal_initializer(mean=0.0, stddev=0.5))), dim=0, N=batch_size)
-                    for i in range(self.read_head_num)]
+            read_vector_list = [expand(tf.tanh(learned_init(self.memory_vector_dim)), dim=0, N=batch_size)
+                for i in range(self.read_head_num)]
 
-                w_list = [expand(tf.nn.softmax(tf.get_variable('init_w_%d' % i, [self.memory_size],
-                    initializer=tf.random_normal_initializer(mean=0.0, stddev=0.5))),
-                    dim=0, N=batch_size) if self.addressing_mode == 'content_and_location'
-                    else tf.zeros([batch_size, self.memory_size])
-                    for i in range(self.read_head_num + self.write_head_num)]
+            w_list = [expand(tf.nn.softmax(learned_init(self.memory_size)), dim=0, N=batch_size)
+                for i in range(self.read_head_num + self.write_head_num)]
 
-                M = expand(tf.tanh(tf.get_variable('init_M', [self.memory_size, self.memory_vector_dim],
-                    initializer=tf.random_normal_initializer(mean=0.0, stddev=0.5))), dim=0, N=batch_size)
-            elif self.init_mode == 'zero':
-                read_vector_list = [tf.zeros([batch_size, self.memory_vector_dim]) for _ in range(self.read_head_num)]
+            M = expand(tf.tanh(
+                tf.reshape(
+                    learned_init(self.memory_size * self.memory_vector_dim),
+                    [self.memory_size, self.memory_vector_dim])
+                ), dim=0, N=batch_size)
 
-                w_list = [tf.concat([tf.ones((batch_size, 1)), tf.zeros((batch_size, self.memory_size-1))], axis=1)
-                    for _ in range(self.read_head_num + self.write_head_num)]
+            controller_init_state = tuple(tf.contrib.rnn.LSTMStateTuple(
+                c=expand(tf.tanh(learned_init(self.controller_units)), dim=0, N=batch_size),
+                h=expand(tf.tanh(learned_init(self.controller_units)), dim=0, N=batch_size))
+                for _ in range(self.controller_layers))
 
-                M = tf.zeros([batch_size, self.memory_size, self.memory_vector_dim])
-            elif self.init_mode == 'learned':
-                read_vector_list = [expand(tf.tanh(learned_init(self.memory_vector_dim)), dim=0, N=batch_size)
-                    for i in range(self.read_head_num)]
-
-                w_list = [expand(tf.nn.softmax(learned_init(self.memory_size)), dim=0, N=batch_size)
-                    for i in range(self.read_head_num + self.write_head_num)]
-
-                M = expand(tf.tanh(
-                    tf.reshape(
-                        learned_init(self.memory_size * self.memory_vector_dim),
-                        [self.memory_size, self.memory_vector_dim])
-                    ), dim=0, N=batch_size)
-
-            if self.controller_type == 'feed_forward':
-                return NTMFFControllerState(
-                    read_vector_list=read_vector_list,
-                    w_list=w_list,
-                    M=M)
-            else:
-                if self.controller_type == 'lstm':
-                    controller_init_state = tuple(tf.contrib.rnn.LSTMStateTuple(
-                        c=expand(tf.tanh(learned_init(self.controller_units)), dim=0, N=batch_size),
-                        h=expand(tf.tanh(learned_init(self.controller_units)), dim=0, N=batch_size))
-                        for _ in range(self.controller_layers))
-                else:
-                    controller_init_state = self.controller.zero_state(batch_size, dtype)
-
-                return NTMRNNControllerState(
-                    controller_state=controller_init_state,
-                    read_vector_list=read_vector_list,
-                    w_list=w_list,
-                    M=M)
+            return NTMControllerState(
+                controller_state=controller_init_state,
+                read_vector_list=read_vector_list,
+                w_list=w_list,
+                M=M)
 
     @property
     def state_size(self):
-        if self.controller_type == 'feed_forward':
-            return NTMFFControllerState(
-                read_vector_list=[self.memory_vector_dim for _ in range(self.read_head_num)],
-                w_list=[self.memory_size for _ in range(self.read_head_num + self.write_head_num)],
-                M=tf.TensorShape([self.memory_size * self.memory_vector_dim]))
-        else:
-            return NTMRNNControllerState(
-                controller_state=self.controller.state_size,
-                read_vector_list=[self.memory_vector_dim for _ in range(self.read_head_num)],
-                w_list=[self.memory_size for _ in range(self.read_head_num + self.write_head_num)],
-                M=tf.TensorShape([self.memory_size * self.memory_vector_dim]))
+        return NTMControllerState(
+            controller_state=self.controller.state_size,
+            read_vector_list=[self.memory_vector_dim for _ in range(self.read_head_num)],
+            w_list=[self.memory_size for _ in range(self.read_head_num + self.write_head_num)],
+            M=tf.TensorShape([self.memory_size * self.memory_vector_dim]))
 
     @property
     def output_size(self):
