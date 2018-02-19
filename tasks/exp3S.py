@@ -14,7 +14,7 @@ class Exp3S:
         self.max_rewards = 50000
 
     def draw_task(self):
-        self.pi = (1 - self.eps) * self._softmax(self.w) + (self.eps / self.N)
+        self.pi = (1 - self.eps) * self._softmax(self.w) + (self.eps / float(self.N))
         self.k = np.random.choice(self.N, p=self.pi)
         return self.k
 
@@ -23,10 +23,10 @@ class Exp3S:
         r_ = v/t
         self._reservoir_sample(r_)
         q_lo, q_hi = self._quantiles()
-        r = self._r(q_lo, q_hi, r_)
+        self.r = self._r(q_lo, q_hi, r_)
 
         alpha_t = 1/float(self.t)
-        r_b_t = np.asarray([((r if i == self.k else 0) + self.beta)/self.pi[i] for i in range(self.N)])
+        r_b_t = np.asarray([((self.r if i == self.k else 0) + self.beta)/self.pi[i] for i in range(self.N)])
         tmp = np.exp(self.w + self.eta * r_b_t)
         for i in range(self.N):
             s = 0
@@ -38,7 +38,6 @@ class Exp3S:
         self.t += 1
 
     def _quantiles(self):
-        dist = max(self.rewards) - min(self.rewards)
         q_lo_pos = int(0.2 * len(self.rewards))
         q_hi_pos = int(0.8 * len(self.rewards)) - 1
         return self.rewards[q_lo_pos], self.rewards[q_hi_pos]
@@ -47,7 +46,7 @@ class Exp3S:
         insert = False
         if len(self.rewards) >= self.max_rewards and np.random.random_sample() < 10.0/float(self.t):
             pos = np.random.randint(0, high=len(self.rewards))
-            del a[pos]
+            del self.rewards[pos]
             insert = True
         if insert or len(self.rewards) < self.max_rewards:
             pos = bisect.bisect_left(self.rewards, r_)
@@ -65,3 +64,20 @@ class Exp3S:
         e_w = np.exp(w)
         return e_w / np.sum(e_w)
 
+def test():
+    exp3s = Exp3S(20, 0.001, 0, 0.05)
+    rewards = [float(i)/sum([j for j in range(20)]) for i in range(20)]
+
+    for i in range(100000):
+        k = exp3s.draw_task()
+        reward = rewards[k]
+        exp3s.update_w(reward, 1)
+
+        if i % 10000 == 0:
+            print 'task:', k, 'reward:', reward, 'scaled_reward', exp3s.r
+            print 'weights:', exp3s.w
+            print 'prob:', exp3s.pi
+
+    print 'final weights:', exp3s.w
+
+# test()

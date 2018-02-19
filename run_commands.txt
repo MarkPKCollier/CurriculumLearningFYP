@@ -25,22 +25,24 @@ gcloud ml-engine jobs submit training lstm_max_seq_len_20_uniform_pad_to_max_seq
     --num_layers=3 \
     --learning_rate=0.00003
 
-gcloud ml-engine jobs submit training dnc_lstm_max_seq_len_20_none_pad_to_max_seq_true_128_locations_3 \
+gcloud ml-engine jobs submit training dnc_associative_recall_lstm_max_seq_len_6_none_pad_to_max_seq_false_128_locations_1 \
     --module-name=tasks.run_tasks \
     --package-path=/Users/markcollier/Documents/CurriculumLearning/tasks \
     --region=us-central1 \
-    --job-dir=gs://mcolliertfnmt7/dnc_lstm_max_seq_len_20_none_pad_to_max_seq_true_128_locations_3 \
+    --job-dir=gs://mcolliertfnmt7/dnc_associative_recall_lstm_max_seq_len_6_none_pad_to_max_seq_false_128_locations_1 \
     --runtime-version=1.2 \
     --scale-tier=BASIC_GPU -- \
-    --experiment_name=dnc_lstm_max_seq_len_20_none_pad_to_max_seq_true_128_locations_3 \
-    --init_mode=learned \
+    --experiment_name=dnc_associative_recall_lstm_max_seq_len_6_none_pad_to_max_seq_false_128_locations_1 \
     --mann=dnc \
     --num_memory_locations=128 \
-    --max_seq_len=20 \
+    --max_seq_len=6 \
     --num_train_steps=31250 \
-    --verbose=True \
-    --curriculum=none \
-    --controller_type=lstm \
-    --pad_to_max_seq_len=True \
+    --verbose=False \
+    --curriculum=uniform \
+    --pad_to_max_seq_len=False \
     --batch_size=32 \
-    --steps_per_eval=200
+    --steps_per_eval=200 \
+    --task=associative_recall \
+    --num_bits_per_vector=6 \
+    --num_units=256 \
+    --num_layers=3

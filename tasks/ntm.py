@@ -149,10 +149,7 @@ class NTMCell(tf.contrib.rnn.RNNCell):
                     [self.memory_size, self.memory_vector_dim])
                 ), dim=0, N=batch_size)
 
-            controller_init_state = tuple(tf.contrib.rnn.LSTMStateTuple(
-                c=expand(tf.tanh(learned_init(self.controller_units)), dim=0, N=batch_size),
-                h=expand(tf.tanh(learned_init(self.controller_units)), dim=0, N=batch_size))
-                for _ in range(self.controller_layers))
+            controller_init_state = self.controller.zero_state(batch_size, dtype)
 
             return NTMControllerState(
                 controller_state=controller_init_state,

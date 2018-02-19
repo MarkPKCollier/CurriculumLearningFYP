@@ -1,6 +1,7 @@
 run_commands.txt
 logs
 head_logs
+logs_*
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
