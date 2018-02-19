@@ -9,7 +9,7 @@ from tensorflow.python.util import nest
 import collections
 from utils import expand, learned_init
 
-NTMControllerState = collections.namedtuple('NTMRNNControllerState', ('controller_state', 'read_vector_list', 'w_list', 'M'))
+NTMControllerState = collections.namedtuple('NTMControllerState', ('controller_state', 'read_vector_list', 'w_list', 'M'))
 
 class NTMCell(tf.contrib.rnn.RNNCell):
     def __init__(self, controller_layers, controller_units, memory_size, memory_vector_dim, read_head_num, write_head_num,

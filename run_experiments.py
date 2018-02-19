@@ -1,14 +1,14 @@
 import os
 import time
 
-run_cmd = '''gcloud ml-engine jobs submit training zero_cont_init_{0}_mann_{1}_curric_{2}_pad_{3}_num_{6}_{7} \
+run_cmd = '''gcloud ml-engine jobs submit training {0}_mann_{1}_curric_{2}_pad_{3}_num_{6}_{7} \
 --module-name=tasks.run_tasks \
 --package-path=/Users/markcollier/Documents/CurriculumLearning/tasks \
 --region=us-central1 \
---job-dir=gs://mcolliertfnmt7/zero_cont_init_{0}_mann_{1}_curric_{2}_pad_{3}_num_{6}_{7} \
+--job-dir=gs://mcolliertfnmt7/{0}_mann_{1}_curric_{2}_pad_{3}_num_{6}_{7} \
 --runtime-version=1.2 \
 --scale-tier=BASIC_GPU -- \
---experiment_name=zero_cont_init_{0}_mann_{1}_curric_{2}_pad_{3}_num_{6}_{7} \
+--experiment_name={0}_mann_{1}_curric_{2}_pad_{3}_num_{6}_{7} \
 --task={0} \
 --mann={1} \
 --curriculum={2} \
@@ -40,7 +40,7 @@ for experiment_number in range(NUM_EXPERIMENTAL_REPEATS):
                 os.system(
                     run_cmd.format(
                         task, mann, curriculum, pad_to_max_seq_len, num_units, num_layers, VERSION, experiment_number+1, max_seq_len, num_bits_per_vector))
-                experiment_name = 'zero_cont_init_{0}_mann_{1}_curric_{2}_pad_{3}_num_{4}_{5}'.format(task, mann, curriculum, pad_to_max_seq_len, VERSION, experiment_number+1)
+                experiment_name = '{0}_mann_{1}_curric_{2}_pad_{3}_num_{4}_{5}'.format(task, mann, curriculum, pad_to_max_seq_len, VERSION, experiment_number+1)
                 stream_cmds.append('gcloud ml-engine jobs stream-logs {0} > ../logs/{1}.txt'.format(experiment_name, experiment_name))
                 time.sleep(15)
 

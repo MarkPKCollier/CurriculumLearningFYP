@@ -1,4 +1,5 @@
 run_commands.txt
+*.csv
 logs
 head_logs
 logs_*
