@@ -20,7 +20,7 @@ run_cmd = '''gcloud ml-engine jobs submit training {0}_mann_{1}_curric_{2}_pad_{
 --num_bits_per_vector={9}
 '''
 
-VERSION = 0
+VERSION = 1
 NUM_EXPERIMENTAL_REPEATS = 3
 
 # task, max_seq_len, num_bits_per_vector = ('copy', 20, 8)

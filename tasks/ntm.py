@@ -7,7 +7,7 @@ import numpy as np
 import tensorflow as tf
 from tensorflow.python.util import nest
 import collections
-from utils import expand, learned_init
+from utils import expand, learned_init, create_linear_initializer
 
 NTMControllerState = collections.namedtuple('NTMControllerState', ('controller_state', 'read_vector_list', 'w_list', 'M'))
 
@@ -33,6 +33,9 @@ class NTMCell(tf.contrib.rnn.RNNCell):
         self.output_dim = output_dim
         self.shift_range = shift_range
 
+        self.o2p_initializer = create_linear_initializer(self.controller_units)
+        self.o2o_initializer = create_linear_initializer(self.controller_units + self.memory_vector_dim * self.read_head_num)
+
     def __call__(self, x, prev_state):
         prev_read_vector_list = prev_state.read_vector_list
 
@@ -44,7 +47,9 @@ class NTMCell(tf.contrib.rnn.RNNCell):
         num_heads = self.read_head_num + self.write_head_num
         total_parameter_num = num_parameters_per_head * num_heads + self.memory_vector_dim * 2 * self.write_head_num
         with tf.variable_scope("o2p", reuse=(self.step > 0) or self.reuse):
-            parameters = tf.contrib.layers.fully_connected(controller_output, total_parameter_num, activation_fn=None)
+            parameters = tf.contrib.layers.fully_connected(
+                controller_output, total_parameter_num, activation_fn=None,
+                weights_initializer=self.o2p_initializer)
             parameters = tf.clip_by_value(parameters, -self.clip_value, self.clip_value)
         head_parameter_list = tf.split(parameters[:, :num_parameters_per_head * num_heads], num_heads, axis=1)
         erase_add_list = tf.split(parameters[:, num_parameters_per_head * num_heads:], 2 * self.write_head_num, axis=1)
@@ -87,8 +92,9 @@ class NTMCell(tf.contrib.rnn.RNNCell):
         else:
             output_dim = self.output_dim
         with tf.variable_scope("o2o", reuse=(self.step > 0) or self.reuse):
-            NTM_output = tf.contrib.layers.fully_connected(tf.concat([controller_output] + read_vector_list, axis=1),
-                output_dim, activation_fn=None)
+            NTM_output = tf.contrib.layers.fully_connected(
+                tf.concat([controller_output] + read_vector_list, axis=1), output_dim, activation_fn=None,
+                weights_initializer=self.o2o_initializer)
             NTM_output = tf.clip_by_value(NTM_output, -self.clip_value, self.clip_value)
 
         self.step += 1
