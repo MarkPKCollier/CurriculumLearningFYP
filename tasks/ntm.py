@@ -13,7 +13,8 @@ NTMControllerState = collections.namedtuple('NTMControllerState', ('controller_s
 
 class NTMCell(tf.contrib.rnn.RNNCell):
     def __init__(self, controller_layers, controller_units, memory_size, memory_vector_dim, read_head_num, write_head_num,
-                 addressing_mode='content_and_location', shift_range=1, reuse=False, output_dim=None, clip_value=20):
+                 addressing_mode='content_and_location', shift_range=1, reuse=False, output_dim=None, clip_value=20,
+                 init_mode='learned'):
         self.controller_layers = controller_layers
         self.controller_units = controller_units
         self.memory_size = memory_size
@@ -28,6 +29,8 @@ class NTMCell(tf.contrib.rnn.RNNCell):
             return tf.contrib.rnn.BasicLSTMCell(num_units, forget_bias=1.0)
 
         self.controller = tf.contrib.rnn.MultiRNNCell([single_cell(self.controller_units) for _ in range(self.controller_layers)])
+
+        self.init_mode = init_mode
 
         self.step = 0
         self.output_dim = output_dim
@@ -149,13 +152,24 @@ class NTMCell(tf.contrib.rnn.RNNCell):
             w_list = [expand(tf.nn.softmax(learned_init(self.memory_size)), dim=0, N=batch_size)
                 for i in range(self.read_head_num + self.write_head_num)]
 
-            M = expand(tf.tanh(
-                tf.reshape(
-                    learned_init(self.memory_size * self.memory_vector_dim),
-                    [self.memory_size, self.memory_vector_dim])
-                ), dim=0, N=batch_size)
-
             controller_init_state = self.controller.zero_state(batch_size, dtype)
+
+            if self.init_mode == 'learned':
+                M = expand(tf.tanh(
+                    tf.reshape(
+                        learned_init(self.memory_size * self.memory_vector_dim),
+                        [self.memory_size, self.memory_vector_dim])
+                    ), dim=0, N=batch_size)
+            elif self.init_mode == 'random':
+                M = expand(
+                    tf.tanh(tf.get_variable('init_M', [self.memory_size, self.memory_vector_dim],
+                        initializer=tf.random_normal_initializer(mean=0.0, stddev=0.5))),
+                    dim=0, N=batch_size)
+            elif self.init_mode == 'constant':
+                M = expand(
+                    tf.get_variable('init_M', [self.memory_size, self.memory_vector_dim],
+                        initializer=tf.constant_initializer(1e-6)),
+                    dim=0, N=batch_size)
 
             return NTMControllerState(
                 controller_state=controller_init_state,

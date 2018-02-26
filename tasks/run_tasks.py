@@ -24,6 +24,7 @@ parser.add_argument('--num_read_heads', type=int, default=1)
 parser.add_argument('--num_write_heads', type=int, default=1)
 parser.add_argument('--conv_shift_range', type=int, default=1, help='only necessary for ntm')
 parser.add_argument('--clip_value', type=int, default=20, help='Maximum absolute value of controller and dnc outputs.')
+parser.add_argument('--init_mode', type=str, default='learned', help='learned | constant | random')
 
 parser.add_argument('--optimizer', type=str, default='RMSProp', help='RMSProp | Adam')
 parser.add_argument('--learning_rate', type=float, default=1e-4)
@@ -83,7 +84,7 @@ class BuildModel(object):
             cell = NTMCell(args.num_layers, args.num_units, args.num_memory_locations, args.memory_size,
                 args.num_read_heads, args.num_write_heads, addressing_mode='content_and_location',
                 shift_range=args.conv_shift_range, reuse=False, output_dim=args.num_bits_per_vector,
-                clip_value=args.clip_value)
+                clip_value=args.clip_value, init_mode=args.init_mode)
 
             initial_state = cell.zero_state(args.batch_size, tf.float32)
         elif args.mann == 'dnc':
