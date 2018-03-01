@@ -37,7 +37,7 @@ parser.add_argument('--curriculum', type=str, default='none', help='none | unifo
 parser.add_argument('--pad_to_max_seq_len', type=str2bool, default=False)
 
 parser.add_argument('--task', type=str, default='copy',
-    help='copy | dynamic_ngrams | traversal | shortest_path')
+    help='copy | associative_recall | traversal | shortest_path')
 parser.add_argument('--num_bits_per_vector', type=int, default=8)
 parser.add_argument('--max_seq_len', type=int, default=20)
 
@@ -112,14 +112,14 @@ class BuildModel(object):
         elif args.task == 'associative_recall':
             self.output_logits = output_sequence[:, 3*(self.max_seq_len+1)+2:, :]
 
-        if args.task in ('copy', 'dynamic_ngrams', 'associative_recall'):
+        if args.task in ('copy', 'associative_recall'):
             self.outputs = tf.sigmoid(self.output_logits)
 
 class BuildTrainModel(BuildModel):
     def __init__(self, max_seq_len, inputs, outputs):
         super(BuildTrainModel, self).__init__(max_seq_len, inputs, tf.contrib.learn.ModeKeys.TRAIN)
 
-        if args.task in ('copy', 'dynamic_ngrams', 'associative_recall'):
+        if args.task in ('copy', 'associative_recall'):
             cross_entropy = tf.nn.sigmoid_cross_entropy_with_logits(labels=outputs, logits=self.output_logits)
             self.loss = tf.reduce_sum(cross_entropy)/args.batch_size
 
@@ -136,7 +136,7 @@ class BuildEvalModel(BuildModel):
     def __init__(self, max_seq_len, inputs, outputs):
         super(BuildEvalModel, self).__init__(max_seq_len, inputs, tf.contrib.learn.ModeKeys.EVAL)
 
-        if args.task in ('copy', 'dynamic_ngrams', 'associative_recall'):
+        if args.task in ('copy', 'associative_recall'):
             self.loss = tf.reduce_sum(tf.nn.sigmoid_cross_entropy_with_logits(labels=outputs, logits=self.output_logits))/args.batch_size
 
 with tf.variable_scope('root'):
