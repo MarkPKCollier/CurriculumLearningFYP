@@ -3,9 +3,7 @@
 # additionally an LSTM controller is used, a feed-forward controller may be used
 # and 2 memory inititialization schemes are offered
 
-import numpy as np
 import tensorflow as tf
-from tensorflow.python.util import nest
 import collections
 from utils import expand, learned_init, create_linear_initializer
 

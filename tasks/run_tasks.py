@@ -1,6 +1,6 @@
 import tensorflow as tf
 import numpy as np
-from generate_data import CopyTaskData, AssociativeRecallData
+from generate_data import CopyTaskData, AssociativeRecallData, TraversalData
 from utils import expand, learned_init
 from exp3S import Exp3S
 
@@ -41,7 +41,7 @@ parser.add_argument('--task', type=str, default='copy',
 parser.add_argument('--num_bits_per_vector', type=int, default=8)
 parser.add_argument('--max_seq_len', type=int, default=20)
 
-parser.add_argument('--verbose', type=str2bool, default=True, help='if true prints lots of feedback')
+parser.add_argument('--verbose', type=str2bool, default=False, help='if true prints lots of feedback')
 parser.add_argument('--experiment_name', type=str, required=True)
 parser.add_argument('--job-dir', type=str, required=False)
 parser.add_argument('--steps_per_eval', type=int, default=200)
@@ -111,9 +111,15 @@ class BuildModel(object):
             self.output_logits = output_sequence[:, self.max_seq_len+1:, :]
         elif args.task == 'associative_recall':
             self.output_logits = output_sequence[:, 3*(self.max_seq_len+1)+2:, :]
+        elif args.task in ('traversal', 'shortest_path'):
+            self.output_logits = output_sequence[:, -self.max_seq_len:, :]
 
         if args.task in ('copy', 'associative_recall'):
             self.outputs = tf.sigmoid(self.output_logits)
+
+        if args.task in ('traversal', 'shortest_path'):
+            output_logits_split = tf.split(self.output_logits, 9, axis=2)
+            self.outputs = tf.concat([tf.nn.softmax(logits) for logits in output_logits_split], axis=2)
 
 class BuildTrainModel(BuildModel):
     def __init__(self, max_seq_len, inputs, outputs):
@@ -121,6 +127,16 @@ class BuildTrainModel(BuildModel):
 
         if args.task in ('copy', 'associative_recall'):
             cross_entropy = tf.nn.sigmoid_cross_entropy_with_logits(labels=outputs, logits=self.output_logits)
+            self.loss = tf.reduce_sum(cross_entropy)/args.batch_size
+
+        if args.task in ('traversal', 'shortest_path'):
+            outputs_split = tf.split(outputs, 9, axis=2)
+            output_logits_split = tf.split(self.output_logits, 9, axis=2)
+
+            cross_entropy = 0.0
+            for outputs, logits in zip(outputs_split, output_logits_split):
+                cross_entropy += tf.nn.softmax_cross_entropy_with_logits(labels=outputs, logits=logits)
+
             self.loss = tf.reduce_sum(cross_entropy)/args.batch_size
 
         if args.optimizer == 'RMSProp':
@@ -139,16 +155,26 @@ class BuildEvalModel(BuildModel):
         if args.task in ('copy', 'associative_recall'):
             self.loss = tf.reduce_sum(tf.nn.sigmoid_cross_entropy_with_logits(labels=outputs, logits=self.output_logits))/args.batch_size
 
+        if args.task in ('traversal', 'shortest_path'):
+            outputs_split = tf.split(outputs, 9, axis=2)
+            output_logits_split = tf.split(self.output_logits, 9, axis=2)
+
+            cross_entropy = 0.0
+            for outputs, logits in zip(outputs_split, output_logits_split):
+                cross_entropy += tf.nn.softmax_cross_entropy_with_logits(labels=outputs, logits=logits)
+
+            self.loss = tf.reduce_sum(cross_entropy)/args.batch_size
+
 with tf.variable_scope('root'):
     train_max_seq_len = tf.placeholder(tf.int32)
-    train_inputs = tf.placeholder(tf.float32, shape=(args.batch_size, None, args.num_bits_per_vector+1))
+    train_inputs = tf.placeholder(tf.float32, shape=(args.batch_size, None, args.num_bits_per_vector+(1 if args.task not in ('traversal', 'shortest_path') else 2)))
     train_outputs = tf.placeholder(tf.float32, shape=(args.batch_size, None, args.num_bits_per_vector))
     train_model = BuildTrainModel(train_max_seq_len, train_inputs, train_outputs)
     initializer = tf.global_variables_initializer()
 
 with tf.variable_scope('root', reuse=True):
     eval_max_seq_len = tf.placeholder(tf.int32)
-    eval_inputs = tf.placeholder(tf.float32, shape=(args.batch_size, None, args.num_bits_per_vector+1))
+    eval_inputs = tf.placeholder(tf.float32, shape=(args.batch_size, None, args.num_bits_per_vector+(1 if args.task not in ('traversal', 'shortest_path') else 2)))
     eval_outputs = tf.placeholder(tf.float32, shape=(args.batch_size, None, args.num_bits_per_vector))
     eval_model = BuildEvalModel(eval_max_seq_len, eval_inputs, eval_outputs)
 
@@ -178,6 +204,15 @@ elif args.task == 'associative_recall':
 
     if args.curriculum == 'prediction_gain':
         exp3s = Exp3S(args.max_seq_len-1, 0.001, 0, 0.05)
+elif args.task == 'traversal':
+    data_generator = TraversalData()
+    target_point = 14
+    curriculum_point = 1 if args.curriculum not in ('prediction_gain', 'none') else target_point
+    progress_error = 0.2
+    convergence_error = 0.01
+
+    if args.curriculum == 'prediction_gain':
+        exp3s = Exp3S(target_point, 0.001, 0, 0.05)
 
 sess = tf.Session()
 sess.run(initializer)
@@ -278,6 +313,8 @@ def eval_generalization():
         seq_lens = [40, 60, 80, 100, 120]
     elif args.task == 'associative_recall':
         seq_lens = [7, 8, 9, 10, 11, 12]
+    elif args.task == 'traversal':
+        seq_lens = [i + 1 for i in range(target_point)]
 
     for i in seq_lens:
         batches = data_generator.generate_batches(
@@ -296,7 +333,7 @@ def eval_generalization():
 
 for i in range(args.num_train_steps):
     if args.curriculum == 'prediction_gain':
-        if args.task == 'copy':
+        if args.task in ('copy', 'traversal'):
             task = 1 + exp3s.draw_task()
         elif args.task == 'associative_recall':
             task = 2 + exp3s.draw_task()
@@ -357,7 +394,7 @@ for i in range(args.num_train_steps):
         if curriculum_point_error < progress_error:
             if args.task == 'copy':
                 curriculum_point = min(target_point, 2 * curriculum_point)
-            elif args.task == 'associative_recall':
+            elif args.task in ('associative_recall', 'traversal'):
                 curriculum_point = min(target_point, curriculum_point+1)
 
         logger.info('----EVAL----')

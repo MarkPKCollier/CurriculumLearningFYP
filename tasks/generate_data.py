@@ -119,11 +119,12 @@ def graph_label_to_one_hot(label):
     res[singles + 20] = 1
     return res
 
-def generate_random_graph(node_range=(3,10), out_degree=(2,4)):
-    num_nodes = np.random.randint(low=node_range[0], high=node_range[1]+1)
-    node_labels = np.random.choice(999, num_nodes, replace=False)
-    edge_label_candidates = np.random.choice(999, num_nodes, replace=False)
-    k = np.random.randint(low=out_degree[0], high=min(num_nodes-1, out_degree[1])+1, size=num_nodes)
+def label_from_vectors(vectors):
+    return map(lambda batch: np.argmax(batch, axis=-1), np.split(vectors, 9, axis=-1))
+
+def generate_random_graph(num_nodes, k):
+    node_labels = 1 + np.random.choice(999, num_nodes, replace=False)
+    edge_label_candidates = 1 + np.random.choice(999, num_nodes, replace=False)
     tree = spatial.KDTree(np.random.uniform(size=(num_nodes, 2)))
 
     graph = {}
@@ -148,6 +149,12 @@ def generate_random_graph(node_range=(3,10), out_degree=(2,4)):
 
     return graph, graph_des_vectors
 
+def generate_random_graphs(num_graphs, node_range=(3,10), out_degree=(2,4)):
+    num_nodes = np.random.randint(low=node_range[0], high=node_range[1]+1)
+    k = np.random.randint(low=out_degree[0], high=min(num_nodes-1, out_degree[1])+1, size=num_nodes)
+
+    return [generate_random_graph(num_nodes, k) for _ in range(num_graphs)]
+
 class TraversalData:
     def __init__(self):
         self.lessons = [
@@ -167,13 +174,16 @@ class TraversalData:
             ((10,40), (2,6), (1,20))
         ]
         self.num_lessons = len(self.lessons)
+        self.termination_pattern = np.concatenate((
+            graph_label_to_one_hot(0),
+            graph_label_to_one_hot(0),
+            graph_label_to_one_hot(0)
+        ))
 
-    def generate_item(self, node_range, out_degree, path_length):
-        graph, graph_des_vectors = generate_random_graph(node_range, out_degree)
+    def generate_item(self, graph, graph_des_vectors, path_length):
         random.shuffle(graph_des_vectors)
 
         path = []
-        path_length = np.random.randint(low=path_length[0], high=path_length[1]+1)
         cur_node = random.choice(graph.keys())
         for _ in range(path_length):
             next_node, edge_label = random.choice(graph[cur_node])
@@ -216,7 +226,20 @@ class TraversalData:
 
         return inputs, outputs
 
-    def generate_batches(self, num_batches, batch_size, curriculum_point=1, curriculum='uniform'):
+    def generate_items(self, num_items, node_range, out_degree, path_length):
+        batch_inputs = []
+        batch_outputs = []
+
+        path_length = np.random.randint(low=path_length[0], high=path_length[1]+1)
+        for graph, graph_des_vectors in generate_random_graphs(num_items, node_range, out_degree):
+            inputs, outputs = self.generate_item(graph, graph_des_vectors, path_length)
+            batch_inputs.append(inputs)
+            batch_outputs.append(outputs)
+
+        return batch_inputs, batch_outputs
+
+    def generate_batches(self, num_batches, batch_size, curriculum_point=1, curriculum='uniform',
+        bits_per_vector=None, max_seq_len=None, pad_to_max_seq_len=None):
         batches = []
         for i in range(num_batches):
             if curriculum == 'deterministic_uniform':
@@ -232,20 +255,10 @@ class TraversalData:
             elif curriculum == 'look_back_and_forward':
                 lesson = curriculum_point if np.random.random_sample() < 0.8 else np.random.randint(low=1, high=self.num_lessons+1)
             
-            batch_inputs = []
-            batch_outputs = []
-            for _ in range(batch_size):
-                inputs, outputs = self.generate_item(*self.lessons[lesson-1])
-                batch_inputs.append(inputs)
-                batch_outputs.append(outputs)
+            batch_inputs, batch_outputs = self.generate_items(batch_size, *self.lessons[lesson-1])
 
-            max_input_len = max(map(len, batch_inputs))
-            batch_inputs = map(lambda inputs: inputs + [np.concatenate((np.zeros(90), [1, 0]))
-                for _ in range(max_input_len - len(inputs))], batch_inputs) # padding
-
+            batch_outputs = map(lambda outputs: outputs + [self.termination_pattern], batch_outputs) # eos
             max_output_len = max(map(len, batch_outputs))
-            batch_outputs = map(lambda outputs: outputs + [np.zeros(90)
-                for _ in range(max_output_len - len(outputs))], batch_outputs) # padding
 
             batch_inputs = np.asarray(batch_inputs).astype(np.float32)
             batch_outputs = np.asarray(batch_outputs).astype(np.float32)
@@ -255,5 +268,41 @@ class TraversalData:
         return batches
 
     def error_per_seq(self, labels, outputs, num_seq):
-        pass
+        seq_len = labels.shape[1]
 
+        target_digits = label_from_vectors(labels)
+        pred_digits = label_from_vectors(outputs)
+
+        def create_labels(digits):
+            labels = []
+            for i in range(num_seq):
+                tmp = []
+                for j in range(seq_len):
+                    tmp.append((
+                        digits[0][i][j],
+                        digits[1][i][j],
+                        digits[2][i][j]
+                    ))
+                labels.append(tmp)
+            return labels
+
+        target_source_digits, pred_source_digits = create_labels(target_digits[:3]), create_labels(pred_digits[:3])
+        target_dest_digits, pred_dest_digits = create_labels(target_digits[3:6]), create_labels(pred_digits[3:6])
+        target_edge_digits, pred_edge_digits = create_labels(target_digits[6:9]), create_labels(pred_digits[6:9])
+
+        errors = 0
+        for i in range(num_seq):
+            source_digit_same = all(map(lambda (t1, t2): t1 == t2, zip(target_source_digits[i], pred_source_digits[i])))
+            if not source_digit_same:
+                errors += 1
+                continue
+            target_digit_same = all(map(lambda (t1, t2): t1 == t2, zip(target_dest_digits[i], pred_dest_digits[i])))
+            if not target_digit_same:
+                errors += 1
+                continue
+            target_edge_same = all(map(lambda (t1, t2): t1 == t2, zip(target_edge_digits[i], pred_edge_digits[i])))
+            if not target_edge_same:
+                errors += 1
+                continue
+
+        return errors/float(num_seq)
