@@ -26,7 +26,7 @@ run_cmd = '''gcloud ml-engine jobs submit training {0}_mann_{1}_{10}_init_mode_c
 --batch_size={15} \
 --eval_batch_size={16} \
 --num_train_steps={17} \
---steps_per_eval={19}
+--steps_per_eval={18}
 '''
 
 VERSION = 0
