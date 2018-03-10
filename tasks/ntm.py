@@ -110,15 +110,18 @@ class NTMCell(tf.contrib.rnn.RNNCell):
 
         k = tf.expand_dims(k, axis=2)
         inner_product = tf.matmul(prev_M, k)
-        k_norm = tf.sqrt(tf.reduce_sum(tf.square(k), axis=1, keep_dims=True))
-        M_norm = tf.sqrt(tf.reduce_sum(tf.square(prev_M), axis=2, keep_dims=True))
-        norm_product = M_norm * k_norm
-        K = tf.squeeze(inner_product / (norm_product + 1e-8))                   # eq (6)
+        # k_norm = tf.sqrt(tf.reduce_sum(tf.square(k), axis=1, keep_dims=True))
+        # M_norm = tf.sqrt(tf.reduce_sum(tf.square(prev_M), axis=2, keep_dims=True))
+        # norm_product = M_norm * k_norm
+        # K = tf.squeeze(inner_product / (norm_product + 1e-8))                   # eq (6)
 
-        # Calculating w^c
+        # # Calculating w^c
 
-        K_amplified = tf.exp(tf.expand_dims(beta, axis=1) * K)
-        w_c = K_amplified / tf.reduce_sum(K_amplified, axis=1, keep_dims=True)  # eq (5)
+        # K_amplified = tf.exp(tf.expand_dims(beta, axis=1) * K)
+        # w_c = K_amplified / tf.reduce_sum(K_amplified, axis=1, keep_dims=True)  # eq (5)
+
+        inner_product = tf.squeeze(inner_product, axis=2)
+        w_c = tf.nn.softmax(tf.expand_dims(beta, axis=1) * inner_product, dim=1)
 
         if self.addressing_mode == 'content':                                   # Only focus on content
             return w_c

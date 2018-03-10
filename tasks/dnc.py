@@ -24,7 +24,7 @@ access module, and integrate the output of memory to form an output.
 
 import collections
 import numpy as np
-import sonnet_ as snt
+import sonnet as snt
 import tensorflow as tf
 from tensorflow.python.util import nest
 

@@ -32,17 +32,17 @@ run_cmd = '''gcloud ml-engine jobs submit training {0}_mann_{1}_{10}_init_mode_c
 VERSION = 0
 NUM_EXPERIMENTAL_REPEATS = 3
 
-# task, max_seq_len, num_bits_per_vector, num_memory_locations, memory_size, num_read_heads, learning_rate, batch_size, eval_batch_size, num_train_steps, steps_per_eval = ('copy', 20, 8, 128, 20, 1, 0.0001, 32, 640, 31250, 200)
+task, max_seq_len, num_bits_per_vector, num_memory_locations, memory_size, num_read_heads, learning_rate, batch_size, eval_batch_size, num_train_steps, steps_per_eval = ('copy', 20, 8, 128, 20, 1, 0.0001, 32, 640, 31250, 200)
 # task, max_seq_len, num_bits_per_vector, num_memory_locations, memory_size, num_read_heads, learning_rate, batch_size, eval_batch_size, num_train_steps, steps_per_eval = ('associative_recall', 6, 6, 128, 20, 1, 0.0001, 32, 640, 31250, 200)
-task, max_seq_len, num_bits_per_vector, num_memory_locations, memory_size, num_read_heads, learning_rate, batch_size, eval_batch_size, num_train_steps, steps_per_eval = ('traversal', -1, 90, 256, 50, 5, 0.00001, 2, 400, 500000, 3200)
+# task, max_seq_len, num_bits_per_vector, num_memory_locations, memory_size, num_read_heads, learning_rate, batch_size, eval_batch_size, num_train_steps, steps_per_eval = ('traversal', -1, 90, 256, 50, 5, 0.00001, 2, 400, 500000, 3200)
 
 stream_cmds = []
 
 # manns = [('ntm', 100, 1), ('dnc', 100, 1), ('none', 256, 3)]
-# manns = [('ntm', 100, 1)]
-manns = [('dnc', 256, 3)]
+manns = [('ntm', 100, 1)]
+# manns = [('dnc', 256, 3)]
 # curricula = ['uniform', 'none', 'naive', 'look_back', 'look_back_and_forward', 'prediction_gain']
-curricula = ['look_back']
+curricula = ['uniform']
 
 for experiment_number in range(NUM_EXPERIMENTAL_REPEATS):
     for mann, num_units, num_layers in manns:

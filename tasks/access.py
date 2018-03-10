@@ -19,7 +19,7 @@
 # from __future__ import print_function
 
 import collections
-import sonnet_ as snt
+import sonnet as snt
 import tensorflow as tf
 
 import addressing
