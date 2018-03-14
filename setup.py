@@ -1,7 +1,7 @@
 from setuptools import find_packages
 from setuptools import setup
 
-REQUIRED_PACKAGES = ['dm-sonnet']
+REQUIRED_PACKAGES = ['tensorflow-gpu==1.6', 'dm-sonnet-gpu']
 
 setup(
     name='tasks',
