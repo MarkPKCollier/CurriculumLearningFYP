@@ -15,6 +15,7 @@ class Exp3S:
 
     def draw_task(self):
         self.pi = (1 - self.eps) * self._softmax(self.w) + (self.eps / float(self.N))
+        print self.pi
         self.k = np.random.choice(self.N, p=self.pi)
         return self.k
 

@@ -1,8 +1,9 @@
 import tensorflow as tf
 import numpy as np
-from generate_data import CopyTaskData, AssociativeRecallData, TraversalData
+from generate_data import CopyTaskData, AssociativeRecallData, TraversalData, RepeatCopyTaskData, set_random_seed
 from utils import expand, learned_init
 from exp3S import Exp3S
+from teacher import Teacher
 
 import logging
 logging.basicConfig(level=logging.INFO)
@@ -33,13 +34,15 @@ parser.add_argument('--num_train_steps', type=int, default=31250)
 parser.add_argument('--batch_size', type=int, default=32)
 parser.add_argument('--eval_batch_size', type=int, default=640)
 
-parser.add_argument('--curriculum', type=str, default='none', help='none | uniform | naive | look_back | look_back_and_forward | prediction_gain')
+parser.add_argument('--random_seed', type=int, default=0)
+
+parser.add_argument('--curriculum', type=str, default='none', help='none | uniform | naive | look_back | look_back_and_forward | prediction_gain_bandit | prediction_gain_teacher')
 parser.add_argument('--pad_to_max_seq_len', type=str2bool, default=False)
 
-parser.add_argument('--task', type=str, default='copy',
-    help='copy | associative_recall | traversal | shortest_path')
+parser.add_argument('--task', type=str, default='copy', help='copy | repeat_copy | associative_recall | traversal')
 parser.add_argument('--num_bits_per_vector', type=int, default=8)
 parser.add_argument('--max_seq_len', type=int, default=20)
+parser.add_argument('--max_repeats', type=int, default=10)
 
 parser.add_argument('--verbose', type=str2bool, default=False, help='if true prints lots of feedback')
 parser.add_argument('--experiment_name', type=str, required=True)
@@ -57,6 +60,11 @@ if args.verbose:
     import pickle
     HEAD_LOG_FILE = '../head_logs/{0}.p'.format(args.experiment_name)
     GENERALIZATION_HEAD_LOG_FILE = '../head_logs/generalization_{0}.p'.format(args.experiment_name)
+
+np.random.seed(args.random_seed)
+set_random_seed(args.random_seed)
+
+print 'Random seed', args.random_seed
 
 class BuildModel(object):
     def __init__(self, max_seq_len, inputs, mode):
@@ -109,12 +117,14 @@ class BuildModel(object):
 
         if args.task == 'copy':
             self.output_logits = output_sequence[:, self.max_seq_len+1:, :]
+        elif args.task == 'repeat_copy':
+            self.output_logits = output_sequence[:, self.max_seq_len+2:, :]
         elif args.task == 'associative_recall':
             self.output_logits = output_sequence[:, 3*(self.max_seq_len+1)+2:, :]
         elif args.task in ('traversal', 'shortest_path'):
             self.output_logits = output_sequence[:, -self.max_seq_len:, :]
 
-        if args.task in ('copy', 'associative_recall'):
+        if args.task in ('copy', 'repeat_copy', 'associative_recall'):
             self.outputs = tf.sigmoid(self.output_logits)
 
         if args.task in ('traversal', 'shortest_path'):
@@ -125,7 +135,7 @@ class BuildTrainModel(BuildModel):
     def __init__(self, max_seq_len, inputs, outputs):
         super(BuildTrainModel, self).__init__(max_seq_len, inputs, tf.contrib.learn.ModeKeys.TRAIN)
 
-        if args.task in ('copy', 'associative_recall'):
+        if args.task in ('copy', 'repeat_copy', 'associative_recall'):
             cross_entropy = tf.nn.sigmoid_cross_entropy_with_logits(labels=outputs, logits=self.output_logits)
             self.loss = tf.reduce_sum(cross_entropy)/args.batch_size
 
@@ -152,7 +162,7 @@ class BuildEvalModel(BuildModel):
     def __init__(self, max_seq_len, inputs, outputs):
         super(BuildEvalModel, self).__init__(max_seq_len, inputs, tf.contrib.learn.ModeKeys.EVAL)
 
-        if args.task in ('copy', 'associative_recall'):
+        if args.task in ('copy', 'repeat_copy', 'associative_recall'):
             self.loss = tf.reduce_sum(tf.nn.sigmoid_cross_entropy_with_logits(labels=outputs, logits=self.output_logits))/args.batch_size
 
         if args.task in ('traversal', 'shortest_path'):
@@ -165,18 +175,23 @@ class BuildEvalModel(BuildModel):
 
             self.loss = tf.reduce_sum(cross_entropy)/args.batch_size
 
-with tf.variable_scope('root'):
-    train_max_seq_len = tf.placeholder(tf.int32)
-    train_inputs = tf.placeholder(tf.float32, shape=(args.batch_size, None, args.num_bits_per_vector+(1 if args.task not in ('traversal', 'shortest_path') else 2)))
-    train_outputs = tf.placeholder(tf.float32, shape=(args.batch_size, None, args.num_bits_per_vector))
-    train_model = BuildTrainModel(train_max_seq_len, train_inputs, train_outputs)
-    initializer = tf.global_variables_initializer()
+task_graph = tf.Graph()
+with task_graph.as_default():
+    tf.set_random_seed(args.random_seed)
+    with tf.variable_scope('root'):
+        train_max_seq_len = tf.placeholder(tf.int32)
+        train_inputs = tf.placeholder(tf.float32, shape=(args.batch_size, None, args.num_bits_per_vector+(1 if args.task not in ('traversal', 'shortest_path', 'repeat_copy') else 2)))
+        train_outputs = tf.placeholder(tf.float32, shape=(args.batch_size, None, args.num_bits_per_vector))
+        train_model = BuildTrainModel(train_max_seq_len, train_inputs, train_outputs)
+        initializer = tf.global_variables_initializer()
 
-with tf.variable_scope('root', reuse=True):
-    eval_max_seq_len = tf.placeholder(tf.int32)
-    eval_inputs = tf.placeholder(tf.float32, shape=(args.batch_size, None, args.num_bits_per_vector+(1 if args.task not in ('traversal', 'shortest_path') else 2)))
-    eval_outputs = tf.placeholder(tf.float32, shape=(args.batch_size, None, args.num_bits_per_vector))
-    eval_model = BuildEvalModel(eval_max_seq_len, eval_inputs, eval_outputs)
+    with tf.variable_scope('root', reuse=True):
+        eval_max_seq_len = tf.placeholder(tf.int32)
+        eval_inputs = tf.placeholder(tf.float32, shape=(args.batch_size, None, args.num_bits_per_vector+(1 if args.task not in ('traversal', 'shortest_path', 'repeat_copy') else 2)))
+        eval_outputs = tf.placeholder(tf.float32, shape=(args.batch_size, None, args.num_bits_per_vector))
+        eval_model = BuildEvalModel(eval_max_seq_len, eval_inputs, eval_outputs)
+
+    print "# parameters", np.sum([np.product([xi.value for xi in x.get_shape()]) for x in tf.all_variables()])
 
 # training
 
@@ -189,32 +204,47 @@ generalization_from_multi_task = None
 if args.task == 'copy':
     data_generator = CopyTaskData()
     target_point = args.max_seq_len
-    curriculum_point = 1 if args.curriculum not in ('prediction_gain', 'none') else target_point
+    curriculum_point = 1 if args.curriculum not in ('prediction_gain_bandit', 'prediction_gain_teacher', 'none') else target_point
     progress_error = 1.0
     convergence_error = 0.1
 
-    if args.curriculum == 'prediction_gain':
+    if args.curriculum == 'prediction_gain_bandit':
         exp3s = Exp3S(args.max_seq_len, 0.001, 0, 0.05)
+    if args.curriculum == 'prediction_gain_teacher':
+        teacher = Teacher([i + 1 for i in range(args.max_seq_len)], 1, 2, 10)
+elif args.task == 'repeat_copy':
+    data_generator = RepeatCopyTaskData(args.max_seq_len, args.max_repeats)
+    target_point = (args.max_seq_len, args.max_repeats)
+    curriculum_point = (1, 1) if args.curriculum not in ('prediction_gain_bandit', 'prediction_gain_teacher', 'none') else target_point
+    progress_error = 1.0
+    convergence_error = 0.1
+
+    if args.curriculum == 'prediction_gain_bandit':
+        exp3s = Exp3S(args.max_seq_len * args.max_repeats, 0.001, 0, 0.05)
 elif args.task == 'associative_recall':
     data_generator = AssociativeRecallData()
     target_point = args.max_seq_len
-    curriculum_point = 2 if args.curriculum not in ('prediction_gain', 'none') else target_point
+    curriculum_point = 2 if args.curriculum not in ('prediction_gain_bandit', 'prediction_gain_teacher', 'none') else target_point
     progress_error = 1.0
     convergence_error = 0.1
 
-    if args.curriculum == 'prediction_gain':
+    if args.curriculum == 'prediction_gain_bandit':
         exp3s = Exp3S(args.max_seq_len-1, 0.001, 0, 0.05)
+    if args.curriculum == 'prediction_gain_teacher':
+        teacher = Teacher([i + 2 for i in range(args.max_seq_len-1)], 1, 2, 10)
 elif args.task == 'traversal':
     data_generator = TraversalData()
     target_point = 14
-    curriculum_point = 1 if args.curriculum not in ('prediction_gain', 'none') else target_point
+    curriculum_point = 1 if args.curriculum not in ('prediction_gain_bandit', 'prediction_gain_teacher', 'none') else target_point
     progress_error = 0.2
     convergence_error = 0.01
 
-    if args.curriculum == 'prediction_gain':
+    if args.curriculum == 'prediction_gain_bandit':
         exp3s = Exp3S(target_point, 0.001, 0, 0.05)
+    if args.curriculum == 'prediction_gain_teacher':
+        teacher = Teacher(data_generator.lessons, 2, 0, 3)
 
-sess = tf.Session()
+sess = tf.Session(graph=task_graph)
 sess.run(initializer)
 
 if args.verbose:
@@ -311,6 +341,8 @@ def eval_generalization():
     res = []
     if args.task == 'copy':
         seq_lens = [40, 60, 80, 100, 120]
+    if args.task == 'repeat_copy':
+        seq_lens = [(10, 20), (20, 10)]
     elif args.task == 'associative_recall':
         seq_lens = [7, 8, 9, 10, 11, 12]
     elif args.task == 'traversal':
@@ -332,17 +364,20 @@ def eval_generalization():
     return res
 
 for i in range(args.num_train_steps):
-    if args.curriculum == 'prediction_gain':
+    if args.curriculum in ('prediction_gain_bandit', 'prediction_gain_teacher'):
         if args.task in ('copy', 'traversal'):
-            task = 1 + exp3s.draw_task()
+            task = ((1 + exp3s.draw_task()) if args.curriculum == 'prediction_gain_bandit' else teacher.draw_task())
+        if args.task == 'repeat_copy':
+            task_num = exp3s.draw_task()
+            task = (1 + task_num/args.max_seq_len, 1 + (task_num % args.max_repeats))
         elif args.task == 'associative_recall':
-            task = 2 + exp3s.draw_task()
+            task = ((2 + exp3s.draw_task()) if args.curriculum == 'prediction_gain_bandit' else teacher.draw_task())
 
     seq_len, inputs, labels = data_generator.generate_batches(
         1,
         args.batch_size,
         bits_per_vector=args.num_bits_per_vector,
-        curriculum_point=curriculum_point if args.curriculum != 'prediction_gain' else task,
+        curriculum_point=curriculum_point if args.curriculum not in ('prediction_gain_bandit', 'prediction_gain_teacher') else task,
         max_seq_len=args.max_seq_len,
         curriculum=args.curriculum,
         pad_to_max_seq_len=args.pad_to_max_seq_len
@@ -355,10 +390,13 @@ for i in range(args.num_train_steps):
             train_max_seq_len: seq_len
         })
 
-    if args.curriculum == 'prediction_gain':
+    if args.curriculum in ('prediction_gain_bandit', 'prediction_gain_teacher'):
         loss, _ = run_eval([(seq_len, inputs, labels)])
         v = train_loss - loss
-        exp3s.update_w(v, seq_len)
+        if args.curriculum == 'prediction_gain_bandit':
+            exp3s.update_w(v, seq_len)
+        else:
+            teacher.update_w((task - 1) if args.task in ('copy', 'traversal') else (task - 2), v, seq_len)
 
     avg_errors_per_seq = data_generator.error_per_seq(labels, outputs, args.batch_size)
 
@@ -370,7 +408,7 @@ for i in range(args.num_train_steps):
 
     if i % args.steps_per_eval == 0:
         target_task_error, target_task_loss, multi_task_error, multi_task_loss, curriculum_point_error, \
-        curriculum_point_loss = eval_performance(curriculum_point if args.curriculum != 'prediction_gain' else None, store_heat_maps=args.verbose)
+        curriculum_point_loss = eval_performance(curriculum_point if args.curriculum not in ('prediction_gain_bandit', 'prediction_gain_teacher') else None, store_heat_maps=args.verbose)
 
         if convergence_on_multi_task is None and multi_task_error < convergence_error:
             convergence_on_multi_task = i
@@ -394,6 +432,11 @@ for i in range(args.num_train_steps):
         if curriculum_point_error < progress_error:
             if args.task == 'copy':
                 curriculum_point = min(target_point, 2 * curriculum_point)
+            elif args.task == 'repeat_copy':
+                if curriculum_point[1] < args.max_repeats:
+                    curriculum_point = (curriculum_point[0], min(2*curriculum_point[1], args.max_repeats))
+                elif curriculum_point[0] < args.max_seq_len:
+                    curriculum_point = (min(2*curriculum_point[0], args.max_seq_len), curriculum_point[1])
             elif args.task in ('associative_recall', 'traversal'):
                 curriculum_point = min(target_point, curriculum_point+1)
 

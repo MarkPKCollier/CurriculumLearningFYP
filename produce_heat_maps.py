@@ -4,7 +4,7 @@ import pickle
 import seaborn
 import matplotlib.pyplot as plt
 
-EXPERIMENT_NAME = 'copy_ntm'
+EXPERIMENT_NAME = 'test'
 MANN = 'NTM'
 TASK = 'Copy'
 

@@ -2,6 +2,9 @@ import numpy as np
 from scipy import spatial
 import random
 
+def set_random_seed(seed):
+    np.random.seed(seed)
+
 snap_boolean = np.vectorize(lambda x: 1.0 if x > 0.5 else 0.0)
 
 class CopyTaskData:
@@ -15,7 +18,7 @@ class CopyTaskData:
                 seq_len = np.random.randint(low=1, high=max_seq_len+1)
             elif curriculum == 'none':
                 seq_len = max_seq_len
-            elif curriculum in ('naive', 'prediction_gain'):
+            elif curriculum in ('naive', 'prediction_gain_bandit', 'prediction_gain_teacher'):
                 seq_len = curriculum_point
             elif curriculum == 'look_back':
                 seq_len = curriculum_point if np.random.random_sample() < 0.9 else np.random.randint(low=1, high=curriculum_point+1)
@@ -43,6 +46,62 @@ class CopyTaskData:
         bit_errors = np.sum(np.abs(labels - outputs))
         return bit_errors/num_seq
 
+class RepeatCopyTaskData:
+    def __init__(self, max_seq_len, max_repeats):
+        self.max_seq_len = max_seq_len
+        self.max_repeats = max_repeats
+
+    def _normalize_num_repeats(self, n):
+        return float(n)/self.max_repeats
+
+    def generate_batches(self, num_batches, batch_size, bits_per_vector=8, curriculum_point=20, max_seq_len=20,
+        curriculum='uniform', pad_to_max_seq_len=False):
+        batches = []
+        for i in range(num_batches):
+            if curriculum == 'deterministic_uniform':
+                seq_len = 1 + (i % self.max_seq_len)
+                num_repeats = 1 + (i % self.max_repeats)
+            elif curriculum == 'uniform':
+                seq_len = np.random.randint(low=1, high=self.max_seq_len+1)
+                num_repeats = np.random.randint(low=1, high=self.max_repeats+1)
+            elif curriculum == 'none':
+                seq_len = self.max_seq_len
+                num_repeats = self.max_repeats
+            elif curriculum in ('naive', 'prediction_gain_bandit', 'prediction_gain_teacher'):
+                seq_len, num_repeats = curriculum_point
+            elif curriculum == 'look_back':
+                seq_len = curriculum_point[0] if np.random.random_sample() < 0.9 else np.random.randint(low=1, high=curriculum_point[0]+1)
+                num_repeats = curriculum_point[1] if np.random.random_sample() < 0.9 else np.random.randint(low=1, high=curriculum_point[1]+1)
+            elif curriculum == 'look_back_and_forward':
+                seq_len = curriculum_point[0] if np.random.random_sample() < 0.8 else np.random.randint(low=1, high=self.max_seq_len+1)
+                num_repeats = curriculum_point[1] if np.random.random_sample() < 0.8 else np.random.randint(low=1, high=self.max_repeats+1)
+            
+            pad_to_len = self.max_seq_len if pad_to_max_seq_len else seq_len
+
+            def generate_sequence():
+                return np.asarray([snap_boolean(np.append(np.random.rand(bits_per_vector), (0,0))) for _ in range(seq_len)] \
+                    + [np.zeros(bits_per_vector+2) for _ in range(pad_to_len - seq_len)])
+
+            inputs = np.asarray([generate_sequence() for _ in range(batch_size)]).astype(np.float32)
+            
+            sos = np.zeros([batch_size, 1, bits_per_vector + 2])
+            sos[:, :, bits_per_vector] = 1
+
+            eos = np.zeros([batch_size, 1, bits_per_vector + 2])
+            eos[:, :, bits_per_vector+1] = self._normalize_num_repeats(num_repeats)
+            output_inputs = np.tile(np.zeros_like(inputs), (1, num_repeats, 1))
+
+            full_inputs = np.concatenate((sos, inputs, eos, output_inputs), axis=1)
+
+            batches.append((pad_to_len, full_inputs, np.tile(inputs[:, :, :bits_per_vector], (1, num_repeats, 1))))
+        return batches
+
+    def error_per_seq(self, labels, outputs, num_seq):
+        outputs[outputs >= 0.5] = 1.0
+        outputs[outputs < 0.5] = 0.0
+        bit_errors = np.sum(np.abs(labels - outputs))
+        return bit_errors/num_seq
+
 class AssociativeRecallData:
     def generate_batches(self, num_batches, batch_size, bits_per_vector=6, curriculum_point=6, max_seq_len=6,
         curriculum='uniform', pad_to_max_seq_len=False):
@@ -55,7 +114,7 @@ class AssociativeRecallData:
                 seq_len = np.random.randint(low=2, high=max_seq_len+1)
             elif curriculum == 'none':
                 seq_len = max_seq_len
-            elif curriculum in ('naive', 'prediction_gain'):
+            elif curriculum in ('naive', 'prediction_gain_bandit', 'prediction_gain_teacher'):
                 seq_len = curriculum_point
             elif curriculum == 'look_back':
                 seq_len = curriculum_point if np.random.random_sample() < 0.9 else np.random.randint(low=2, high=curriculum_point+1)
@@ -248,7 +307,7 @@ class TraversalData:
                 lesson = np.random.randint(low=1, high=self.num_lessons+1)
             elif curriculum == 'none':
                 lesson = self.num_lessons
-            elif curriculum in ('naive', 'prediction_gain'):
+            elif curriculum in ('naive', 'prediction_gain_bandit', 'prediction_gain_teacher'):
                 lesson = curriculum_point
             elif curriculum == 'look_back':
                 lesson = curriculum_point if np.random.random_sample() < 0.9 else np.random.randint(low=1, high=curriculum_point+1)
