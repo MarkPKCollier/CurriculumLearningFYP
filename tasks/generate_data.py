@@ -25,6 +25,8 @@ class CopyTaskData:
             elif curriculum == 'look_back_and_forward':
                 seq_len = curriculum_point if np.random.random_sample() < 0.8 else np.random.randint(low=1, high=max_seq_len+1)
             
+            self.seq_len = seq_len
+
             pad_to_len = max_seq_len if pad_to_max_seq_len else seq_len
 
             def generate_sequence():
@@ -32,12 +34,15 @@ class CopyTaskData:
                     + [np.zeros(bits_per_vector+1) for _ in range(pad_to_len - seq_len)])
 
             inputs = np.asarray([generate_sequence() for _ in range(batch_size)]).astype(np.float32)
-            eos = np.ones([batch_size, 1, bits_per_vector + 1])
+            eos = np.zeros([batch_size, 1, bits_per_vector + 1])
+            eos[:, :, bits_per_vector] = 1
             output_inputs = np.zeros_like(inputs)
 
             full_inputs = np.concatenate((inputs, eos, output_inputs), axis=1)
 
-            batches.append((pad_to_len, full_inputs, inputs[:, :, :bits_per_vector]))
+            targets = inputs[:, :, :bits_per_vector]
+
+            batches.append((pad_to_len, full_inputs, targets))
         return batches
 
     def error_per_seq(self, labels, outputs, num_seq):
@@ -45,6 +50,9 @@ class CopyTaskData:
         outputs[outputs < 0.5] = 0.0
         bit_errors = np.sum(np.abs(labels - outputs))
         return bit_errors/num_seq
+
+    def last_seq_len(self):
+        return self.seq_len
 
 class RepeatCopyTaskData:
     def __init__(self, max_seq_len, max_repeats):
@@ -76,6 +84,9 @@ class RepeatCopyTaskData:
                 seq_len = curriculum_point[0] if np.random.random_sample() < 0.8 else np.random.randint(low=1, high=self.max_seq_len+1)
                 num_repeats = curriculum_point[1] if np.random.random_sample() < 0.8 else np.random.randint(low=1, high=self.max_repeats+1)
             
+            self.seq_len = seq_len
+            self.num_repeats = num_repeats
+
             pad_to_len = self.max_seq_len if pad_to_max_seq_len else seq_len
 
             def generate_sequence():
@@ -83,17 +94,17 @@ class RepeatCopyTaskData:
                     + [np.zeros(bits_per_vector+2) for _ in range(pad_to_len - seq_len)])
 
             inputs = np.asarray([generate_sequence() for _ in range(batch_size)]).astype(np.float32)
-            
-            sos = np.zeros([batch_size, 1, bits_per_vector + 2])
-            sos[:, :, bits_per_vector] = 1
 
             eos = np.zeros([batch_size, 1, bits_per_vector + 2])
+            eos[:, :, bits_per_vector] = 1
             eos[:, :, bits_per_vector+1] = self._normalize_num_repeats(num_repeats)
             output_inputs = np.tile(np.zeros_like(inputs), (1, num_repeats, 1))
 
-            full_inputs = np.concatenate((sos, inputs, eos, output_inputs), axis=1)
+            full_inputs = np.concatenate((inputs, eos, output_inputs), axis=1)
 
-            batches.append((pad_to_len, full_inputs, np.tile(inputs[:, :, :bits_per_vector], (1, num_repeats, 1))))
+            targets = np.tile(inputs[:, :, :bits_per_vector], (1, num_repeats, 1))
+
+            batches.append((pad_to_len, full_inputs, targets))
         return batches
 
     def error_per_seq(self, labels, outputs, num_seq):
@@ -101,6 +112,9 @@ class RepeatCopyTaskData:
         outputs[outputs < 0.5] = 0.0
         bit_errors = np.sum(np.abs(labels - outputs))
         return bit_errors/num_seq
+
+    def last_seq_len(self):
+        return self.seq_len
 
 class AssociativeRecallData:
     def generate_batches(self, num_batches, batch_size, bits_per_vector=6, curriculum_point=6, max_seq_len=6,
@@ -121,6 +135,8 @@ class AssociativeRecallData:
             elif curriculum == 'look_back_and_forward':
                 seq_len = curriculum_point if np.random.random_sample() < 0.8 else np.random.randint(low=2, high=max_seq_len+1)
             
+            self.seq_len = seq_len
+
             pad_to_len = max_seq_len if pad_to_max_seq_len else seq_len
 
             def generate_item(seq_len):
@@ -146,11 +162,12 @@ class AssociativeRecallData:
             batch_inputs = np.asarray(batch_inputs).astype(np.float32)
             batch_queries = np.asarray(batch_queries).astype(np.float32)
             batch_outputs = np.asarray(batch_outputs).astype(np.float32)
-            eos = np.ones([batch_size, 1, bits_per_vector + 1])
+            eos = np.zeros([batch_size, 1, bits_per_vector + 1])
+            eos[:, :, bits_per_vector] = 1
             output_inputs = np.zeros([batch_size, NUM_VECTORS_PER_ITEM, bits_per_vector + 1])
 
             if pad_to_max_seq_len:
-                full_inputs = np.concatenate((batch_inputs, eos, batch_queries, eos, np.zeros([batch_size, pad_to_len - seq_len, bits_per_vector + 1]) ,output_inputs), axis=1)
+                full_inputs = np.concatenate(batch_inputs, eos, batch_queries, eos, np.zeros([batch_size, pad_to_len - seq_len, bits_per_vector + 1], output_inputs), axis=1)
             else:
                 full_inputs = np.concatenate((batch_inputs, eos, batch_queries, eos, output_inputs), axis=1)
 
@@ -162,6 +179,9 @@ class AssociativeRecallData:
         outputs[outputs < 0.5] = 0.0
         bit_errors = np.sum(np.abs(labels - outputs))
         return bit_errors/num_seq
+
+    def last_seq_len(self):
+        return self.seq_len
 
 def graph_label_to_one_hot(label):
     res = np.zeros(30)

@@ -115,10 +115,8 @@ class BuildModel(object):
             time_major=False,
             initial_state=initial_state)
 
-        if args.task == 'copy':
+        if args.task == 'copy' or args.task == 'repeat_copy':
             self.output_logits = output_sequence[:, self.max_seq_len+1:, :]
-        elif args.task == 'repeat_copy':
-            self.output_logits = output_sequence[:, self.max_seq_len+2:, :]
         elif args.task == 'associative_recall':
             self.output_logits = output_sequence[:, 3*(self.max_seq_len+1)+2:, :]
         elif args.task in ('traversal', 'shortest_path'):
@@ -205,8 +203,8 @@ if args.task == 'copy':
     data_generator = CopyTaskData()
     target_point = args.max_seq_len
     curriculum_point = 1 if args.curriculum not in ('prediction_gain_bandit', 'prediction_gain_teacher', 'none') else target_point
-    progress_error = 1.0
-    convergence_error = 0.1
+    progress_error = 2.0
+    convergence_error = 0.4
 
     if args.curriculum == 'prediction_gain_bandit':
         exp3s = Exp3S(args.max_seq_len, 0.001, 0, 0.05)
@@ -217,7 +215,7 @@ elif args.task == 'repeat_copy':
     target_point = (args.max_seq_len, args.max_repeats)
     curriculum_point = (1, 1) if args.curriculum not in ('prediction_gain_bandit', 'prediction_gain_teacher', 'none') else target_point
     progress_error = 1.0
-    convergence_error = 0.1
+    convergence_error = 0.2
 
     if args.curriculum == 'prediction_gain_bandit':
         exp3s = Exp3S(args.max_seq_len * args.max_repeats, 0.001, 0, 0.05)
@@ -226,7 +224,7 @@ elif args.task == 'associative_recall':
     target_point = args.max_seq_len
     curriculum_point = 2 if args.curriculum not in ('prediction_gain_bandit', 'prediction_gain_teacher', 'none') else target_point
     progress_error = 1.0
-    convergence_error = 0.1
+    convergence_error = 0.2
 
     if args.curriculum == 'prediction_gain_bandit':
         exp3s = Exp3S(args.max_seq_len-1, 0.001, 0, 0.05)
@@ -340,17 +338,17 @@ def eval_performance(curriculum_point, store_heat_maps=False):
 def eval_generalization():
     res = []
     if args.task == 'copy':
-        seq_lens = [40, 60, 80, 100, 120]
+        seq_lens = [40, 50]
     if args.task == 'repeat_copy':
-        seq_lens = [(10, 20), (20, 10)]
+        seq_lens = [(13, 16), (16, 13), (13, 20), (20, 13)]
     elif args.task == 'associative_recall':
-        seq_lens = [7, 8, 9, 10, 11, 12]
+        seq_lens = [16, 20]
     elif args.task == 'traversal':
         seq_lens = [i + 1 for i in range(target_point)]
 
     for i in seq_lens:
         batches = data_generator.generate_batches(
-            6,
+            12,
             args.batch_size,
             bits_per_vector=args.num_bits_per_vector,
             curriculum_point=i,
@@ -394,9 +392,9 @@ for i in range(args.num_train_steps):
         loss, _ = run_eval([(seq_len, inputs, labels)])
         v = train_loss - loss
         if args.curriculum == 'prediction_gain_bandit':
-            exp3s.update_w(v, seq_len)
+            exp3s.update_w(v, data_generator.last_seq_len())
         else:
-            teacher.update_w((task - 1) if args.task in ('copy', 'traversal') else (task - 2), v, seq_len)
+            teacher.update_w((task - 1) if args.task in ('copy', 'traversal') else (task - 2), v, data_generator.last_seq_len())
 
     avg_errors_per_seq = data_generator.error_per_seq(labels, outputs, args.batch_size)
 
@@ -430,14 +428,14 @@ for i in range(args.num_train_steps):
                 generalization_from_target_task = eval_generalization()
 
         if curriculum_point_error < progress_error:
-            if args.task == 'copy':
+            if args.task in ('copy', 'associative_recall'):
                 curriculum_point = min(target_point, 2 * curriculum_point)
             elif args.task == 'repeat_copy':
-                if curriculum_point[1] < args.max_repeats:
+                if curriculum_point[1] < args.max_repeats and curriculum_point[1] <= curriculum_point[0]:
                     curriculum_point = (curriculum_point[0], min(2*curriculum_point[1], args.max_repeats))
                 elif curriculum_point[0] < args.max_seq_len:
                     curriculum_point = (min(2*curriculum_point[0], args.max_seq_len), curriculum_point[1])
-            elif args.task in ('associative_recall', 'traversal'):
+            elif args.task == 'traversal':
                 curriculum_point = min(target_point, curriculum_point+1)
 
         logger.info('----EVAL----')

@@ -8,7 +8,8 @@ for log_file in sorted(glob.glob('logs/*.txt')):
     f = open(log_file, 'r').read()
     res = []
     res.append((log_file + '_step', log_file + '_target_task_error', log_file + '_multi_task_error'))
-    for i, target_task_error, target_task_loss, multi_task_error, multi_task_loss, curricilum, curriculum_point_error, curriculum_point_loss in re.findall('EVAL_PARSABLE: (\d+),([-+]?\d*\.\d+|\d+),(-?\ *[0-9]+\.?[0-9]*(?:[Ee]\ *-?\ *[0-9]+)?),([-+]?\d*\.\d+|\d+),(-?\ *[0-9]+\.?[0-9]*(?:[Ee]\ *-?\ *[0-9]+)?),(\d+),([-+]?\d*\.\d+|\d+|None),(-?\ *[0-9]+\.?[0-9]*(?:[Ee]\ *-?\ *[0-9]+)?|None)\n', f):
+    for i, target_task_error, target_task_loss, multi_task_error, multi_task_loss, curricilum, curriculum_point_error, curriculum_point_loss \
+    in re.findall('EVAL_PARSABLE: (\d+),([-+]?\d*\.\d+|\d+),(-?\ *[0-9]+\.?[0-9]*(?:[Ee]\ *-?\ *[0-9]+)?),([-+]?\d*\.\d+|\d+),(-?\ *[0-9]+\.?[0-9]*(?:[Ee]\ *-?\ *[0-9]+)?),(\d+|\(.*\)),([-+]?\d*\.\d+|\d+|None),(-?\ *[0-9]+\.?[0-9]*(?:[Ee]\ *-?\ *[0-9]+)?|None)\n', f):
         res.append((i, target_task_error, multi_task_error))
     columns.append(res)
 
