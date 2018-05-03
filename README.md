@@ -2,6 +2,8 @@
 
 This repository contains the source code for a set of experiments which compare the performance of 6 syllabuses for curriculum learning.
 
+We conduct experiments comparing the syllabuses effect on speed of learning and generalization ability on the Copy, Repeat Copy and Associative Recall problems proposed in the Neural Turing Machines Paper.
+
 ## Repo Guide
 
 - ```/``` scripts for running experiments and analyzing their results.

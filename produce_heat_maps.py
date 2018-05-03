@@ -4,9 +4,9 @@ import pickle
 import seaborn
 import matplotlib.pyplot as plt
 
-EXPERIMENT_NAME = 'test'
+EXPERIMENT_NAME = 'associative_recall_ntm'
 MANN = 'NTM'
-TASK = 'Copy'
+TASK = 'Associative Recall'
 
 HEAD_LOG_FILE = 'head_logs/{0}.p'.format(EXPERIMENT_NAME)
 GENERALIZATION_HEAD_LOG_FILE = 'head_logs/generalization_{0}.p'.format(EXPERIMENT_NAME)
@@ -21,7 +21,7 @@ def plot_figures(figures, nrows=1, ncols=1, width_ratios=None):
         axeslist.ravel()[ind].imshow(fig, cmap='gray', interpolation='nearest')
         axeslist.ravel()[ind].set_title(title)
         if TASK != 'Associative Recall' or ind == 0:
-            axeslist.ravel()[ind].set_xlabel('Time ------->')
+            axeslist.ravel()[ind].set_xlabel('Timestep ----->')
     
     if TASK == 'Associative Recall':
         plt.sca(axeslist[1])

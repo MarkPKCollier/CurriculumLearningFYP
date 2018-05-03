@@ -2,14 +2,14 @@ import re
 import glob
 import itertools
 
-NUM_EXP = 6
+NUM_EXP = 3
 NUM_REPEATS = 10
-NUM_GENERALIZATION_POINTS = 4
+NUM_GENERALIZATION_POINTS = 2
 target_res = [[] for _ in range(NUM_GENERALIZATION_POINTS)]
 multi_res = [[] for _ in range(NUM_GENERALIZATION_POINTS)]
 num_re = '([-+]?\d*\.\d+|\d+)'
 
-log_dir = 'logs'
+log_dir = 'logs_ntm_diff_init_repeat_copy_10_runs_cosine_sim'
 
 for log_file in sorted(glob.glob('{0}/*.txt'.format(log_dir))):
     f = open(log_file, 'r').read()

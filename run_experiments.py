@@ -3,7 +3,7 @@ import time
 
 run_cmd = '''gcloud ml-engine jobs submit training {0}_mann_{1}_{10}_init_mode_curric_{2}_pad_{3}_num_{6}_{7} \
 --module-name=tasks.run_tasks \
---package-path=/Users/markcollier/Documents/CurriculumLearning/tasks \
+--package-path=/path/to/package/CurriculumLearning/tasks \
 --region=us-east1 \
 --job-dir=gs://your_google_storeage_bucket/{0}_mann_{1}_curric_{2}_pad_{3}_num_{6}_{7} \
 --runtime-version=1.6 \
